@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>XoiLacTV – Họp trực tuyến</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Space+Mono:wght@400;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <!-- ════════════════════════════════════════════════════════
+         MÀN HÌNH LOBBY – Trang chủ, nhập phòng
+         TEST: Đây là màn hình đầu tiên khi mở app
+         ════════════════════════════════════════════════════════ -->
+    <div id="lobby-screen" class="screen">
+      <!-- Header -->
+      <header class="lobby-header">
+        <div class="logo-wrap">
+          <div class="logo-icon">
+            <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="24" cy="24" r="22" fill="#FF6B35" stroke="#fff" stroke-width="2"/>
+              <path d="M17 16 L17 32 L35 24 Z" fill="white"/>
+              <circle cx="13" cy="24" r="4" fill="#FFD166"/>
+            </svg>
+          </div>
+          <span class="logo-text">XoiLac<span class="logo-accent">TV</span></span>
+        </div>
+        <div class="header-status">
+          <span class="status-dot"></span>
+          <span id="connection-status" class="status-online">Đang kết nối...</span>
+        </div>
+      </header>
+
+      <!-- Hero section -->
+      <main class="lobby-main">
+        <div class="hero-text">
+          <h1 class="hero-title">
+           XoiLacTV,<br />
+            <span class="hero-highlight">XoiL</span>
+          </h1>
+          <p class="hero-sub">
+            Nhóm 5 - Ứng Dụng Họp Trực Tuyến
+          </p>
+        </div>
+
+        <!-- Form tham gia phòng -->
+        <div class="join-card">
+          <div class="join-card-header">
+            <span class="join-icon">🎥</span>
+            <h2>Tham gia cuộc họp</h2>
+          </div>
+
+          <div class="form-group">
+            <label for="input-username">Tên của bạn</label>
+            <input
+              type="text"
+              id="input-username"
+              placeholder="Nguyễn Văn A..."
+              maxlength="30"
+            />
+          </div>
+
+          <div class="form-group">
+            <label for="input-room">Mã phòng họp</label>
+            <div class="input-row">
+              <input
+                type="text"
+                id="input-room"
+                placeholder="Nhập mã phòng hoặc tạo mới..."
+                maxlength="20"
+              />
+              <!-- TEST: Nút tạo mã phòng ngẫu nhiên -->
+              <button
+                class="btn-gen"
+                onclick="document.getElementById('input-room').value = Math.random().toString(36).slice(2,8).toUpperCase()"
+                title="Tạo mã ngẫu nhiên"
+              >🎲</button>
+            </div>
+          </div>
+
+          <p id="lobby-error" class="lobby-error hidden"></p>
+
+          <button id="btn-join" class="btn-join">
+            <span>🚀</span> Tham gia ngay
+          </button>
+
+          <div class="join-tip">
+            💡 Chia sẻ mã phòng cho người khác để cùng tham gia
+          </div>
+        </div>
+
+        <!-- Thông tin tính năng -->
+        <div class="features-row">
+          <div class="feature-chip">✅ WebRTC P2P</div>
+          <div class="feature-chip">🎙️ Echo Cancel</div>
+          <div class="feature-chip">📊 Đo độ trễ</div>
+          <div class="feature-chip">💬 Chat nhóm</div>
+        </div>
+      </main>
+    </div>
+
+    <!-- ════════════════════════════════════════════════════════
+         MÀN HÌNH MEETING – Phòng họp chính
+         TEST: Vào đây sau khi tham gia phòng
+         ════════════════════════════════════════════════════════ -->
+    <div id="meeting-screen" class="screen hidden">
+      <!-- Topbar -->
+      <header class="meeting-topbar">
+        <div class="topbar-left">
+          <div class="logo-mini">
+            <svg viewBox="0 0 48 48" fill="none">
+              <circle cx="24" cy="24" r="22" fill="#FF6B35"/>
+              <path d="M17 16 L17 32 L35 24 Z" fill="white"/>
+              <circle cx="13" cy="24" r="4" fill="#FFD166"/>
+            </svg>
+            <span>XoiLac<b>TV</b></span>
+          </div>
+          <div class="meeting-meta">
+            <span class="meta-label">Phòng:</span>
+            <span id="room-id-display" class="meta-value mono">---</span>
+            <span class="meta-sep">·</span>
+            <span id="participant-count" class="meta-value">1 người</span>
+          </div>
+        </div>
+        <div class="topbar-right">
+          <span class="user-badge">👤 <span id="username-display"></span></span>
+          <div class="echo-topbar-badge echo-on" id="echo-topbar-badge">
+            <span class="echo-dot-anim"></span>
+            <span id="echo-topbar-label">Echo Cancel: BẬT</span>
+          </div>
+          <div class="status-indicator">
+            <span class="pulse-dot"></span> Live
+          </div>
+        </div>
+      </header>
+
+      <!-- Layout chính: video + sidebar -->
+      <div class="meeting-body">
+        <!-- ── Video Grid ─────────────────────────────────── -->
+        <div class="video-section">
+          <!-- video-grid-wrapper chứa TẤT CẢ tiles (local + peers)
+               data-count được cập nhật bởi JS để grid chia đều -->
+          <div class="video-grid-wrapper" id="video-grid-wrapper" data-count="1">
+            <!-- Video của mình (luôn hiện) -->
+            <div class="video-container local-video-container" id="local-container">
+              <video id="local-video" autoplay muted playsinline></video>
+              <div class="video-overlay">
+                <span class="peer-name">Bạn (Local)</span>
+                <span class="peer-status connected">🟢 Đang phát</span>
+              </div>
+              <div class="local-badge">YOU</div>
+              <!-- Echo cancellation visual indicator -->
+              <div class="echo-active-indicator" id="echo-video-indicator">
+                <div class="echo-wave">
+                  <span></span><span></span><span></span><span></span><span></span>
+                </div>
+                AEC BẬT
+              </div>
+            </div>
+            <!-- Video của các peer và screen share tile thêm vào đây -->
+          </div>
+          <!-- id="video-grid" vẫn tồn tại nhưng dùng wrapper thay thế -->
+          <div id="video-grid" style="display:none"></div>
+
+          <!-- ── Bảng thống kê độ trễ End-to-End ─────────────
+               TEST: Sau khi kết nối → bảng sẽ cập nhật mỗi 3 giây
+               Xem RTT, Jitter, Packet Loss, FPS của từng peer
+               ──────────────────────────────────────────────── -->
+          <div class="latency-panel">
+            <div class="panel-header">
+              <span class="panel-icon">📊</span>
+              <h3>Đánh giá độ trễ End-to-End</h3>
+              <span class="panel-hint">Cập nhật mỗi 3 giây</span>
+            </div>
+            <div class="latency-table-wrap">
+              <table class="latency-table">
+                <thead>
+                  <tr>
+                    <th>Người dùng</th>
+                    <th>RTT (ms) ↕</th>
+                    <th>Jitter (ms)</th>
+                    <th>Mất gói (%)</th>
+                    <th>FPS</th>
+                    <th>Đánh giá</th>
+                  </tr>
+                </thead>
+                <tbody id="latency-tbody">
+                  <tr>
+                    <td colspan="6" class="empty-row">
+                      Chưa có kết nối nào. Mời người khác vào phòng...
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Chú thích màu sắc -->
+            <div class="latency-legend">
+              <span class="legend-item latency-good">🟢 &lt; 50ms: Xuất sắc</span>
+              <span class="legend-item latency-fair">🟡 50–150ms: Trung bình</span>
+              <span class="legend-item latency-poor">🔴 &gt; 150ms: Kém</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Sidebar: Chat + Participants ──────────────── -->
+        <aside class="sidebar">
+          <!-- Tabs -->
+          <div class="sidebar-tabs">
+            <button class="tab-btn active" onclick="switchTab('chat')">💬 Chat</button>
+            <button class="tab-btn" onclick="switchTab('info')">ℹ️ Thông tin</button>
+          </div>
+
+          <!-- Chat panel -->
+          <div id="tab-chat" class="tab-content active">
+            <div id="chat-messages" class="chat-messages"></div>
+            <div class="chat-input-row">
+              <input
+                type="text"
+                id="input-chat"
+                placeholder="Nhắn tin..."
+                maxlength="200"
+              />
+              <button id="btn-send-chat" class="btn-send">➤</button>
+            </div>
+          </div>
+
+          <!-- Info panel -->
+          <div id="tab-info" class="tab-content hidden">
+            <div class="info-section">
+              <h4>🔧 Cấu hình WebRTC</h4>
+              <div class="echo-info-banner on" id="echo-info-banner">
+                <span style="font-size:1.4rem">🎙️</span>
+                <div>
+                  <div id="echo-info-title">Echo Cancellation: BẬT</div>
+                  <div class="echo-info-sub" id="echo-info-sub">
+                    AEC + Noise Suppression + AGC đang hoạt động
+                  </div>
+                </div>
+              </div>
+              <div class="info-item">
+                <span>Echo Cancellation</span>
+                <span class="info-value" id="echo-status">BẬT</span>
+              </div>
+              <div class="info-item">
+                <span>ICE Servers</span>
+                <span class="info-value">Google STUN</span>
+              </div>
+              <div class="info-item">
+                <span>Audio Sample Rate</span>
+                <span class="info-value">48 kHz</span>
+              </div>
+              <div class="info-item">
+                <span>Video Resolution</span>
+                <span class="info-value">720p HD</span>
+              </div>
+            </div>
+            <div class="info-section">
+              <h4>📖 Hướng dẫn test</h4>
+              <ol class="test-guide">
+                <li>Mở 2 tab với cùng Room ID</li>
+                <li>Quan sát video 2 chiều</li>
+                <li>Xem bảng RTT cập nhật</li>
+                <li>Thử tắt mic/cam</li>
+                <li>Mở <code>chrome://webrtc-internals</code></li>
+              </ol>
+            </div>
+          </div>
+        </aside>
+      </div>
+
+      <!-- ── Control Bar (thanh điều khiển dưới) ────────────────────────
+           TEST: Nhấn từng nút để kiểm tra chức năng
+           ──────────────────────────────────────────────────────────── -->
+      <footer class="control-bar">
+        <!-- Mic -->
+        <button id="btn-toggle-mic" class="ctrl-btn">
+          <span class="btn-icon">🎤</span>
+          <span class="btn-label">Mic</span>
+        </button>
+
+        <!-- Camera -->
+        <button id="btn-toggle-cam" class="ctrl-btn">
+          <span class="btn-icon">📹</span>
+          <span class="btn-label">Camera</span>
+        </button>
+
+        <!-- Echo Cancellation toggle -->
+        <button id="btn-toggle-echo" class="ctrl-btn btn-active">
+          <span class="btn-icon">🔊</span>
+          <span class="btn-label">Echo Cancel: BẬT</span>
+        </button>
+
+        <!-- Screen Share -->
+        <button id="btn-screen-share" class="ctrl-btn" title="Chia sẻ màn hình">
+          <span class="btn-icon">🖥️</span>
+          <span class="btn-label">Màn hình</span>
+        </button>
+
+        <!-- Screen share live indicator -->
+        <div class="screenshare-live-badge hidden" id="screenshare-live-badge">
+          <span class="share-pulse"></span> Đang chia sẻ
+        </div>
+
+        <!-- Spacer -->
+        <div class="ctrl-spacer"></div>
+
+        <!-- Rời phòng -->
+        <button id="btn-leave" class="ctrl-btn btn-leave">
+          <span class="btn-icon">📴</span>
+          <span class="btn-label">Rời phòng</span>
+        </button>
+      </footer>
+    </div>
+
+    <!-- Notifications container -->
+    <div id="notifications" class="notifications"></div>
+
+    <!-- ── Scripts ─────────────────────────────────────────────────── -->
+    <!-- Socket.IO client (từ server) -->
+    <script src="/socket.io/socket.io.js"></script>
+    <!-- WebRTC Manager -->
+    <script src="webrtc.js"></script>
+    <!-- App Logic -->
+    <script src="app.js"></script>
+    <script>
+      // Tab switching
+      function switchTab(name) {
+        document.querySelectorAll(".tab-content").forEach((el) => {
+          el.classList.add("hidden");
+          el.classList.remove("active");
+        });
+        document.querySelectorAll(".tab-btn").forEach((el) =>
+          el.classList.remove("active")
+        );
+        document.getElementById(`tab-${name}`).classList.remove("hidden");
+        document.getElementById(`tab-${name}`).classList.add("active");
+        event.target.classList.add("active");
+      }
+    </script>
+  </body>
+</html>
