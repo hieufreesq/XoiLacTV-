@@ -1,0 +1,143 @@
+# 🎥 XoiLacTV – Ứng dụng Hội nghị Truyền hình WebRTC
+
+> Video conference P2P · Echo Cancellation · Đo độ trễ End-to-End
+
+---
+
+## 📁 Cấu trúc dự án
+
+```
+XoiLacTV/
+├── server.js          ← Signaling Server (Express + Socket.IO)
+├── package.json       ← Dependencies
+├── public/
+│   ├── index.html     ← Giao diện chính (Lobby + Meeting)
+│   ├── style.css      ← Thiết kế UI sáng, hiện đại
+│   ├── webrtc.js      ← WebRTC Manager (P2P, Echo Cancel, Latency)
+│   └── app.js         ← Logic ứng dụng (UI events, Socket events)
+└── README.md
+```
+
+---
+
+## 🚀 Cài đặt & Chạy
+
+```bash
+# 1. Cài dependencies
+npm install
+
+# 2. Chạy server
+npm start
+
+# 3. Mở trình duyệt
+open http://localhost:3000
+```
+
+---
+
+## 🧪 Hướng dẫn TEST từng tính năng
+
+### ✅ TEST 1: Kết nối P2P WebRTC
+1. Mở **2 tab** hoặc **2 trình duyệt** tại `http://localhost:3000`
+2. Nhập cùng 1 **Mã phòng** (ví dụ: `TEST01`)
+3. Nhấn **Tham gia ngay** ở cả 2 tab
+4. ✅ Kết quả: Video của cả 2 người xuất hiện, âm thanh 2 chiều
+
+---
+
+### ✅ TEST 2: Echo Cancellation
+**Level 1 - Browser Built-in (getUserMedia constraints):**
+```javascript
+// Xem trong app.js - hàm initLocalStream()
+echoCancellation: true   // Đổi thành false → nghe thấy tiếng vọng
+noiseSuppression: true   // Lọc tiếng ồn nền
+autoGainControl: true    // Tự điều chỉnh âm lượng
+```
+
+**Level 2 - AudioContext Pipeline (webrtc.js):**
+- `DynamicsCompressor` → giảm âm đột biến
+- `HighpassFilter (80Hz)` → lọc tiếng ù thấp
+- `LowpassFilter (8kHz)` → lọc nhiễu cao
+
+**Cách test:**
+1. Dùng loa ngoài (không dùng tai nghe)
+2. Vào cuộc họp với 2 tab
+3. Nói vào mic → ✅ Không nghe tiếng vọng lại
+
+---
+
+### ✅ TEST 3: Đo độ trễ End-to-End
+**Dữ liệu lấy từ `RTCPeerConnection.getStats()`:**
+- **RTT** (Round-Trip Time): độ trễ khứ hồi (ms)
+- **Jitter**: biến động độ trễ (ms)
+- **Packet Loss**: % gói tin bị mất
+- **FPS**: khung hình/giây
+
+**Cách xem:**
+1. Kết nối 2 peer
+2. Scroll xuống bảng **"Đánh giá độ trễ End-to-End"**
+3. Bảng tự cập nhật mỗi **3 giây**
+4. Badge RTT cũng hiện ngay trên video
+
+**Simulate mạng yếu (Chrome DevTools):**
+- F12 → Network → Throttling → chọn "Slow 3G"
+- Quan sát RTT tăng cao và màu đỏ
+
+---
+
+### ✅ TEST 4: Tắt/Bật Mic và Camera
+- Nhấn nút 🎤 **Mic** → track audio bị disable, peer kia không nghe được
+- Nhấn nút 📹 **Camera** → track video bị disable, video tối đi
+- Kiểm tra trong Console: `[WebRTC] track.enabled = false`
+
+---
+
+### ✅ TEST 5: Chat nhóm
+- Gõ tin nhắn trong ô chat → Enter hoặc nhấn ➤
+- Tin nhắn hiện cho tất cả người trong phòng
+
+---
+
+### ✅ TEST 6: WebRTC Internals (Chrome)
+- Mở tab mới: `chrome://webrtc-internals`
+- Xem đồ thị ICE candidates, bandwidth, RTT
+
+---
+
+## 🔧 Kiến trúc kỹ thuật
+
+```
+Browser A                    Server                    Browser B
+   |                           |                           |
+   |──── join-room ──────────► |                           |
+   |                           |◄─── join-room ────────── |
+   |◄─── room-joined ───────── |                           |
+   |                           |──── user-joined ─────────►|
+   |─────────────────── offer ─────────────────────────────►|
+   |◄────────────────── answer ────────────────────────────-|
+   |─────────────── ice-candidate ─────────────────────────►|
+   |◄────────────── ice-candidate ─────────────────────────-|
+   |                           |                           |
+   |◄════════ P2P Audio/Video Stream (trực tiếp) ══════════►|
+```
+
+---
+
+## 📦 Dependencies
+
+| Package | Phiên bản | Mục đích |
+|---------|-----------|----------|
+| express | ^4.18.2 | HTTP Server |
+| socket.io | ^4.6.1 | Signaling (SDP/ICE) |
+| uuid | ^9.0.0 | Tạo Room ID |
+
+---
+
+## 🌐 Mở rộng thực tế
+
+Để dùng qua internet (khác mạng LAN), cần thêm **TURN server**:
+```javascript
+// Trong webrtc.js - this.iceConfig
+{ urls: "turn:your-turn-server.com", username: "user", credential: "pass" }
+```
+Dịch vụ TURN miễn phí: [Twilio TURN](https://www.twilio.com/stun-turn) hoặc tự host với [coturn](https://github.com/coturn/coturn).
