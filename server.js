@@ -31,96 +31,56 @@ const io = new Server(server, {
 app.use(express.static(path.join(__dirname, "public")));
 app.use(express.json());
 
-/**
- * API: Trả về cấu hình ICE Servers cho client
- * ─────────────────────────────────────────────────────────────────────────
- * Tại sao cần endpoint này thay vì hardcode ở client?
- *  1. Bảo mật: credential TURN không lộ trong source code public
- *  2. Linh hoạt: thay TURN server mà không cần redeploy frontend
- *
- * HƯỚNG DẪN LẤY TURN MIỄN PHÍ (Metered.ca):
- *  1. Đăng ký tại: https://www.metered.ca/tools/openrelay/
- *  2. Copy các URLs vào biến môi trường bên dưới
- *  3. Hoặc dùng thẳng OpenRelay public (không cần đăng ký, giới hạn bandwidth)
- *
- * RAILWAY DEPLOY: Vào Settings → Variables → thêm các biến TURN_*
- */
-app.get("/api/ice-servers", (req, res) => {
+// ─── API trả về ICE Servers (STUN + TURN) cho client ─────────────────────
+// Gọi Metered.ca API để lấy TURN credentials động
+// TEST: Mở https://xoilactv-n5.up.railway.app/api/ice-servers
+//       Phải thấy JSON có mảng "iceServers" với các entry "turn:..."
+app.get("/api/ice-servers", async (req, res) => {
   const iceServers = [
-    // ── STUN servers (tìm IP public, miễn phí) ──────────────────────
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
-    { urls: "stun:openrelay.metered.ca:80" },
-
-    // ── TURN servers (relay khi P2P thất bại - QUAN TRỌNG cho khác mạng) ─
-    // Option A: OpenRelay public (không cần đăng ký, dùng được ngay)
-    {
-      urls: "turn:openrelay.metered.ca:80",
-      username: "openrelayproject",
-      credential: "openrelayproject",
-    },
-    {
-      urls: "turn:openrelay.metered.ca:443",
-      username: "openrelayproject",
-      credential: "openrelayproject",
-    },
-    {
-      urls: "turn:openrelay.metered.ca:443?transport=tcp",
-      username: "openrelayproject",
-      credential: "openrelayproject",
-    },
-    {
-      urls: "turns:openrelay.metered.ca:443",
-      username: "openrelayproject",
-      credential: "openrelayproject",
-    },
-
-    // Option B: TURN riêng từ biến môi trường (ưu tiên hơn nếu có)
-    // Đặt trong Railway: TURN_URL, TURN_USER, TURN_PASS
-    ...(process.env.TURN_URL
-      ? [
-          {
-            urls: process.env.TURN_URL,
-            username: process.env.TURN_USER || "",
-            credential: process.env.TURN_PASS || "",
-          },
-        ]
-      : []),
   ];
 
-  console.log(`[ICE] Trả về ${iceServers.length} ICE servers`);
+  try {
+    const meteredUrl = `https://xoilactv.metered.live/api/v1/turn/credentials?apiKey=Jy_TP2M-dA5pqY6TjA9EDYWagtgaPtOq_o8gDo1a73sHEb8m`;
+    const response = await fetch(meteredUrl);
+    const turns = await response.json();
+
+    if (Array.isArray(turns) && turns.length > 0) {
+      iceServers.push(...turns);
+      console.log(`[ICE] ✅ Metered OK: ${turns.length} TURN servers`);
+    } else {
+      console.warn("[ICE] ⚠️ Metered trả về rỗng hoặc lỗi:", JSON.stringify(turns));
+    }
+  } catch (e) {
+    console.error("[ICE] ❌ Metered fetch lỗi:", e.message);
+  }
+
+  const turnCount = iceServers.filter(s => String(s.urls).startsWith("turn")).length;
+  console.log(`[ICE] Trả về client: ${iceServers.length} servers (${turnCount} TURN)`);
   res.json({ iceServers });
 });
 
 // ─── Lưu trữ danh sách phòng và người dùng ────────────────────────────────
-// rooms = { roomId: { users: [{ socketId, username, joinedAt }] } }
 const rooms = {};
 
 // ─── Xử lý kết nối Socket.IO ──────────────────────────────────────────────
 io.on("connection", (socket) => {
   console.log(`[SERVER] Người dùng kết nối: ${socket.id}`);
 
-  /**
-   * SỰ KIỆN: join-room
-   * Client gửi khi muốn tham gia phòng họp
-   * Payload: { roomId, username }
-   * TEST: Mở 2 tab, cùng nhập 1 roomId → xem cả 2 có kết nối không
-   */
+  // SỰ KIỆN: join-room
   socket.on("join-room", ({ roomId, username }) => {
-    // Tạo phòng nếu chưa tồn tại
     if (!rooms[roomId]) {
       rooms[roomId] = { users: [] };
     }
 
     const room = rooms[roomId];
 
-    // Giới hạn tối đa 10 người/phòng
     if (room.users.length >= 10) {
       socket.emit("room-full", { message: "Phòng đã đầy (tối đa 10 người)" });
       return;
     }
 
-    // Thêm user vào phòng
     room.users.push({
       socketId: socket.id,
       username: username || `Người dùng ${socket.id.slice(0, 4)}`,
@@ -131,7 +91,6 @@ io.on("connection", (socket) => {
     socket.roomId = roomId;
     socket.username = username;
 
-    // Thông báo cho user mới: danh sách người đang có trong phòng
     const existingUsers = room.users
       .filter((u) => u.socketId !== socket.id)
       .map((u) => ({ socketId: u.socketId, username: u.username }));
@@ -142,23 +101,16 @@ io.on("connection", (socket) => {
       mySocketId: socket.id,
     });
 
-    // Thông báo cho mọi người trong phòng có user mới
     socket.to(roomId).emit("user-joined", {
       socketId: socket.id,
       username: username || socket.id,
     });
 
-    console.log(
-      `[SERVER] ${username} tham gia phòng ${roomId} | Tổng: ${room.users.length} người`
-    );
+    console.log(`[SERVER] ${username} tham gia phòng ${roomId} | Tổng: ${room.users.length} người`);
   });
 
-  /**
-   * SỰ KIỆN: offer
-   * Peer A gửi SDP Offer đến Peer B để bắt đầu thương lượng WebRTC
-   * TEST: Xem console log khi 2 peer kết nối
-   */
-  socket.on("offer", ({ targetId, offer, fromId }) => {
+  // SỰ KIỆN: offer - Peer A gửi SDP Offer đến Peer B
+  socket.on("offer", ({ targetId, offer }) => {
     console.log(`[SERVER] SDP Offer: ${socket.id} → ${targetId}`);
     io.to(targetId).emit("offer", {
       offer,
@@ -167,36 +119,21 @@ io.on("connection", (socket) => {
     });
   });
 
-  /**
-   * SỰ KIỆN: answer
-   * Peer B trả lời SDP Answer cho Peer A
-   */
+  // SỰ KIỆN: answer - Peer B trả lời SDP Answer
   socket.on("answer", ({ targetId, answer }) => {
     console.log(`[SERVER] SDP Answer: ${socket.id} → ${targetId}`);
     io.to(targetId).emit("answer", { answer, fromId: socket.id });
   });
 
-  /**
-   * SỰ KIỆN: ice-candidate
-   * Trao đổi ICE Candidates để tìm đường kết nối P2P tốt nhất
-   * TEST: Xem Network tab trong Chrome DevTools → WebRTC internals
-   */
+  // SỰ KIỆN: ice-candidate - Trao đổi ICE Candidates
   socket.on("ice-candidate", ({ targetId, candidate }) => {
     io.to(targetId).emit("ice-candidate", { candidate, fromId: socket.id });
   });
 
-  /**
-   * SỰ KIỆN: latency-ping
-   * Client gửi ping để đo độ trễ end-to-end qua signaling server
-   * TEST: Xem kết quả latency hiển thị trên UI
-   */
+  // SỰ KIỆN: latency-ping - Đo độ trễ
   socket.on("latency-ping", ({ timestamp, targetId }) => {
-    // Chuyển tiếp ping đến peer đích (đo RTT thực tế)
     if (targetId) {
-      io.to(targetId).emit("latency-ping", {
-        timestamp,
-        fromId: socket.id,
-      });
+      io.to(targetId).emit("latency-ping", { timestamp, fromId: socket.id });
     }
   });
 
@@ -204,10 +141,7 @@ io.on("connection", (socket) => {
     io.to(targetId).emit("latency-pong", { timestamp, fromId: socket.id });
   });
 
-  /**
-   * SỰ KIỆN: chat-message
-   * Nhắn tin trong phòng
-   */
+  // SỰ KIỆN: chat-message
   socket.on("chat-message", ({ roomId, message, username }) => {
     io.to(roomId).emit("chat-message", {
       message,
@@ -217,25 +151,17 @@ io.on("connection", (socket) => {
     });
   });
 
-  /**
-   * SỰ KIỆN: disconnect
-   * Xử lý khi người dùng ngắt kết nối
-   */
+  // SỰ KIỆN: disconnect
   socket.on("disconnect", () => {
     const roomId = socket.roomId;
     if (roomId && rooms[roomId]) {
-      // Xóa user khỏi danh sách phòng
       rooms[roomId].users = rooms[roomId].users.filter(
         (u) => u.socketId !== socket.id
       );
-
-      // Thông báo cho mọi người trong phòng
       socket.to(roomId).emit("user-left", {
         socketId: socket.id,
         username: socket.username,
       });
-
-      // Dọn dẹp phòng trống
       if (rooms[roomId].users.length === 0) {
         delete rooms[roomId];
         console.log(`[SERVER] Phòng ${roomId} đã bị xóa (trống)`);
@@ -244,9 +170,7 @@ io.on("connection", (socket) => {
     console.log(`[SERVER] Người dùng ngắt kết nối: ${socket.id}`);
   });
 });
-if (process.env.METERED_API_KEY && process.env.METERED_APP_NAME) {
-    // tự động fetch TURN credentials từ Metered.ca
-}
+
 // ─── Khởi động server ──────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
