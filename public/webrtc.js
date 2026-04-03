@@ -39,21 +39,62 @@ class WebRTCManager {
     // Bộ đếm thống kê độ trễ
     this.latencyStats = {};
 
-    // ─── Cấu hình ICE Servers (STUN public của Google) ──────────────────
-    // TEST: Dùng STUN để kết nối qua NAT. Với mạng thực thêm TURN server.
+    // ICE config (STUN + TURN) – load từ server qua loadIceConfig()
+    // Fallback nếu fetch thất bại
     this.iceConfig = {
       iceServers: [
         { urls: "stun:stun.l.google.com:19302" },
-        { urls: "stun:stun1.l.google.com:19302" },
-        { urls: "stun:stun2.l.google.com:19302" },
+        // TURN OpenRelay fallback cứng – dùng được ngay không cần đăng ký
+        {
+          urls: "turn:openrelay.metered.ca:80",
+          username: "openrelayproject",
+          credential: "openrelayproject",
+        },
+        {
+          urls: "turn:openrelay.metered.ca:443?transport=tcp",
+          username: "openrelayproject",
+          credential: "openrelayproject",
+        },
       ],
-      // Tắt bundle để tách riêng audio/video streams
       bundlePolicy: "max-bundle",
       rtcpMuxPolicy: "require",
+      iceCandidatePoolSize: 10,
     };
 
     // Khởi động vòng lặp đo latency mỗi 3 giây
     this._startLatencyMonitor();
+
+    // Load danh sách ICE server đầy đủ (kể cả TURN riêng) từ server
+    this.loadIceConfig();
+  }
+
+  /**
+   * Fetch ICE servers từ /api/ice-servers (server.js cung cấp)
+   * ─────────────────────────────────────────────────────────────────
+   * Tại sao fetch từ server thay vì hardcode?
+   *  - TURN credential không lộ trong source code
+   *  - Có thể thay TURN provider mà không cần deploy lại frontend
+   *
+   * TEST: Mở Network tab → xem request GET /api/ice-servers
+   */
+  async loadIceConfig() {
+    try {
+      const res = await fetch("/api/ice-servers");
+      const data = await res.json();
+      if (data.iceServers && data.iceServers.length > 0) {
+        this.iceConfig.iceServers = data.iceServers;
+        console.log(
+          `[ICE] Đã load ${data.iceServers.length} ICE servers từ server`
+        );
+        // Log để debug: xem có TURN server không
+        const turnServers = data.iceServers.filter((s) =>
+          s.urls.toString().startsWith("turn")
+        );
+        console.log(`[ICE] TURN servers: ${turnServers.length} (cần ≥1 để kết nối khác mạng)`);
+      }
+    } catch (err) {
+      console.warn("[ICE] Không load được ICE config từ server, dùng fallback:", err.message);
+    }
   }
 
   /**
@@ -86,26 +127,51 @@ class WebRTCManager {
     };
 
     // ─── Xử lý ICE Candidates ─────────────────────────────────────────
-    // TEST: Xem chrome://webrtc-internals để theo dõi ICE gathering
+    // Log loại candidate để debug: host=LAN, srflx=STUN, relay=TURN
+    // Cần thấy "relay" candidate mới kết nối được khác mạng (5G ↔ WiFi)
+    pc.onicegatheringstatechange = () => {
+      console.log(`[ICE] Gathering (${peerId.slice(0,6)}): ${pc.iceGatheringState}`);
+    };
+
     pc.onicecandidate = (event) => {
       if (event.candidate) {
-        this.socket.emit("ice-candidate", {
-          targetId: peerId,
-          candidate: event.candidate,
-        });
+        const candStr = event.candidate.candidate || "";
+        const typeMatch = candStr.match(/typ (\w+)/);
+        const type = typeMatch ? typeMatch[1] : "?";
+        // TEST: Mở DevTools Console → phải thấy type "relay" mới OK với khác mạng
+        if (type === "relay") {
+          console.log("%c[ICE] ✅ TURN relay candidate – khác mạng OK!", "color:green;font-weight:bold");
+        } else {
+          console.log(`[ICE] Candidate type: ${type}`);
+        }
+        this.socket.emit("ice-candidate", { targetId: peerId, candidate: event.candidate });
+      } else {
+        console.log(`[ICE] Gathering hoàn tất cho ${peerId.slice(0,6)}`);
       }
     };
 
     // ─── Theo dõi trạng thái kết nối ICE ──────────────────────────────
     pc.oniceconnectionstatechange = () => {
-      console.log(
-        `[WebRTC] ICE State (${peerId}): ${pc.iceConnectionState}`
-      );
-      if (
-        pc.iceConnectionState === "disconnected" ||
-        pc.iceConnectionState === "failed" ||
-        pc.iceConnectionState === "closed"
-      ) {
+      const state = pc.iceConnectionState;
+      console.log(`[ICE] State (${peerId.slice(0,6)}): ${state}`);
+
+      if (state === "failed") {
+        // ICE Restart: tạo lại credentials, thường fix được "failed"
+        // TEST: Khi thấy "failed" → xem có log "ICE Restart" không
+        console.warn("[ICE] ❌ Thất bại! Thử ICE Restart...");
+        if (isInitiator) {
+          this._createOffer(peerId, pc, true);
+        }
+      }
+      if (state === "disconnected") {
+        setTimeout(() => {
+          if (pc.iceConnectionState === "disconnected") {
+            this.onPeerDisconnect(peerId);
+            this.closePeerConnection(peerId);
+          }
+        }, 5000);
+      }
+      if (state === "closed") {
         this.onPeerDisconnect(peerId);
         this.closePeerConnection(peerId);
       }
@@ -113,9 +179,11 @@ class WebRTCManager {
 
     // ─── Theo dõi trạng thái kết nối chung ────────────────────────────
     pc.onconnectionstatechange = () => {
-      console.log(
-        `[WebRTC] Connection State (${peerId}): ${pc.connectionState}`
-      );
+      const state = pc.connectionState;
+      console.log(`[WebRTC] Connection State (${peerId.slice(0,6)}): ${state}`);
+      window.dispatchEvent(new CustomEvent("peer-connection-state", {
+        detail: { peerId, state }
+      }));
     };
 
     // ─── Nếu là initiator: tạo Offer ──────────────────────────────────
@@ -130,15 +198,25 @@ class WebRTCManager {
    * Tạo SDP Offer và gửi cho peer
    * TEST: Xem console log "SDP Offer tạo thành công"
    */
-  async _createOffer(peerId, pc) {
+  /**
+   * @param {boolean} iceRestart - true khi muốn khởi động lại ICE
+   *   dùng khi ICE state = "failed", tạo lại credentials mới
+   *   TEST: Xem log "ICE Restart" trong console khi kết nối thất bại
+   */
+  async _createOffer(peerId, pc, iceRestart = false) {
     try {
       const offer = await pc.createOffer({
         offerToReceiveAudio: true,
         offerToReceiveVideo: true,
+        iceRestart,          // Khi true: bắt buộc thu thập lại tất cả ICE candidates
       });
 
       await pc.setLocalDescription(offer);
-      console.log(`[WebRTC] SDP Offer tạo thành công cho ${peerId}`);
+      if (iceRestart) {
+        console.log(`[WebRTC] 🔄 ICE Restart Offer gửi cho ${peerId.slice(0,6)}`);
+      } else {
+        console.log(`[WebRTC] SDP Offer tạo thành công cho ${peerId.slice(0,6)}`);
+      }
 
       this.socket.emit("offer", {
         targetId: peerId,
