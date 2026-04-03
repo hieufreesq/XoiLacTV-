@@ -29,6 +29,68 @@ const io = new Server(server, {
 
 // ─── Phục vụ các file tĩnh từ thư mục public ──────────────────────────────
 app.use(express.static(path.join(__dirname, "public")));
+app.use(express.json());
+
+/**
+ * API: Trả về cấu hình ICE Servers cho client
+ * ─────────────────────────────────────────────────────────────────────────
+ * Tại sao cần endpoint này thay vì hardcode ở client?
+ *  1. Bảo mật: credential TURN không lộ trong source code public
+ *  2. Linh hoạt: thay TURN server mà không cần redeploy frontend
+ *
+ * HƯỚNG DẪN LẤY TURN MIỄN PHÍ (Metered.ca):
+ *  1. Đăng ký tại: https://www.metered.ca/tools/openrelay/
+ *  2. Copy các URLs vào biến môi trường bên dưới
+ *  3. Hoặc dùng thẳng OpenRelay public (không cần đăng ký, giới hạn bandwidth)
+ *
+ * RAILWAY DEPLOY: Vào Settings → Variables → thêm các biến TURN_*
+ */
+app.get("/api/ice-servers", (req, res) => {
+  const iceServers = [
+    // ── STUN servers (tìm IP public, miễn phí) ──────────────────────
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+    { urls: "stun:openrelay.metered.ca:80" },
+
+    // ── TURN servers (relay khi P2P thất bại - QUAN TRỌNG cho khác mạng) ─
+    // Option A: OpenRelay public (không cần đăng ký, dùng được ngay)
+    {
+      urls: "turn:openrelay.metered.ca:80",
+      username: "openrelayproject",
+      credential: "openrelayproject",
+    },
+    {
+      urls: "turn:openrelay.metered.ca:443",
+      username: "openrelayproject",
+      credential: "openrelayproject",
+    },
+    {
+      urls: "turn:openrelay.metered.ca:443?transport=tcp",
+      username: "openrelayproject",
+      credential: "openrelayproject",
+    },
+    {
+      urls: "turns:openrelay.metered.ca:443",
+      username: "openrelayproject",
+      credential: "openrelayproject",
+    },
+
+    // Option B: TURN riêng từ biến môi trường (ưu tiên hơn nếu có)
+    // Đặt trong Railway: TURN_URL, TURN_USER, TURN_PASS
+    ...(process.env.TURN_URL
+      ? [
+          {
+            urls: process.env.TURN_URL,
+            username: process.env.TURN_USER || "",
+            credential: process.env.TURN_PASS || "",
+          },
+        ]
+      : []),
+  ];
+
+  console.log(`[ICE] Trả về ${iceServers.length} ICE servers`);
+  res.json({ iceServers });
+});
 
 // ─── Lưu trữ danh sách phòng và người dùng ────────────────────────────────
 // rooms = { roomId: { users: [{ socketId, username, joinedAt }] } }
