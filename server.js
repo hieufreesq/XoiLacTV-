@@ -29,46 +29,57 @@ const io = new Server(server, {
 
 // ─── Phục vụ các file tĩnh từ thư mục public ──────────────────────────────
 app.use(express.static(path.join(__dirname, "public")));
-app.use(express.json());
 
-// ─── API trả về ICE Servers (STUN + TURN) cho client ─────────────────────
-// Gọi Metered.ca API để lấy TURN credentials động
-// TEST: Mở https://xoilactv-n5.up.railway.app/api/ice-servers
-//       Phải thấy JSON có mảng "iceServers" với các entry "turn:..."
+// ─── Cấu hình Metered TURN ────────────────────────────────────────────────
+const METERED_API_KEY  = process.env.METERED_API_KEY  || "Jy_TP2M-dA5pqY6TjA9EDYWagtgaPtOq_o8gDo1a73sHEb8m";
+const METERED_APP_NAME = process.env.METERED_APP_NAME || "xoilactv.metered.live";
+
+// ─── Route: cấp ICE Servers (STUN + TURN credentials) cho client ──────────
+// Client gọi GET /api/ice-servers trước khi tạo RTCPeerConnection
 app.get("/api/ice-servers", async (req, res) => {
-  const iceServers = [
-    { urls: "stun:stun.l.google.com:19302" },
-    { urls: "turn:standard.relay.metered.live:80" },
-  ];
-
   try {
-    const meteredUrl = `https://xoilactv.metered.live/api/v1/turn/credentials?apiKey=Jy_TP2M-dA5pqY6TjA9EDYWagtgaPtOq_o8gDo1a73sHEb8m`;
-    const response = await fetch(meteredUrl);
-    const turns = await response.json();
+    const url = `https://${METERED_APP_NAME}/api/v1/turn/credentials?apiKey=${METERED_API_KEY}`;
+    const response = await fetch(url);
 
-    if (Array.isArray(turns) && turns.length > 0) {
-      iceServers.push(...turns);
-      console.log(`[ICE] ✅ Metered OK: ${turns.length} TURN servers`);
-    } else {
-      console.warn("[ICE] ⚠️ Metered trả về rỗng hoặc lỗi:", JSON.stringify(turns));
+    if (!response.ok) {
+      throw new Error(`Metered API lỗi: ${response.status}`);
     }
-  } catch (e) {
-    console.error("[ICE] ❌ Metered fetch lỗi:", e.message);
-  }
 
-  const turnCount = iceServers.filter(s => String(s.urls).startsWith("turn")).length;
-  console.log(`[ICE] Trả về client: ${iceServers.length} servers (${turnCount} TURN)`);
-  res.json({ iceServers });
+    const iceServers = await response.json();
+
+    // Thêm STUN của Google vào đầu danh sách
+    const fullIceServers = [
+      { urls: "stun:stun.l.google.com:19302" },
+      { urls: "stun:stun1.l.google.com:19302" },
+      ...iceServers,
+    ];
+
+    console.log(`[SERVER] Cấp ICE Servers: ${fullIceServers.length} servers`);
+    res.json(fullIceServers);
+  } catch (err) {
+    console.error("[SERVER] Lỗi lấy ICE Servers từ Metered:", err.message);
+
+    // Fallback: chỉ trả về STUN nếu TURN lỗi
+    res.json([
+      { urls: "stun:stun.l.google.com:19302" },
+      { urls: "stun:stun1.l.google.com:19302" },
+    ]);
+  }
 });
 
 // ─── Lưu trữ danh sách phòng và người dùng ────────────────────────────────
+// rooms = { roomId: { users: [{ socketId, username, joinedAt }] } }
 const rooms = {};
 
 // ─── Xử lý kết nối Socket.IO ──────────────────────────────────────────────
 io.on("connection", (socket) => {
   console.log(`[SERVER] Người dùng kết nối: ${socket.id}`);
 
-  // SỰ KIỆN: join-room
+  /**
+   * SỰ KIỆN: join-room
+   * Client gửi khi muốn tham gia phòng họp
+   * Payload: { roomId, username }
+   */
   socket.on("join-room", ({ roomId, username }) => {
     if (!rooms[roomId]) {
       rooms[roomId] = { users: [] };
@@ -106,10 +117,14 @@ io.on("connection", (socket) => {
       username: username || socket.id,
     });
 
-    console.log(`[SERVER] ${username} tham gia phòng ${roomId} | Tổng: ${room.users.length} người`);
+    console.log(
+      `[SERVER] ${username} tham gia phòng ${roomId} | Tổng: ${room.users.length} người`
+    );
   });
 
-  // SỰ KIỆN: offer - Peer A gửi SDP Offer đến Peer B
+  /**
+   * SỰ KIỆN: offer
+   */
   socket.on("offer", ({ targetId, offer }) => {
     console.log(`[SERVER] SDP Offer: ${socket.id} → ${targetId}`);
     io.to(targetId).emit("offer", {
@@ -119,21 +134,30 @@ io.on("connection", (socket) => {
     });
   });
 
-  // SỰ KIỆN: answer - Peer B trả lời SDP Answer
+  /**
+   * SỰ KIỆN: answer
+   */
   socket.on("answer", ({ targetId, answer }) => {
     console.log(`[SERVER] SDP Answer: ${socket.id} → ${targetId}`);
     io.to(targetId).emit("answer", { answer, fromId: socket.id });
   });
 
-  // SỰ KIỆN: ice-candidate - Trao đổi ICE Candidates
+  /**
+   * SỰ KIỆN: ice-candidate
+   */
   socket.on("ice-candidate", ({ targetId, candidate }) => {
     io.to(targetId).emit("ice-candidate", { candidate, fromId: socket.id });
   });
 
-  // SỰ KIỆN: latency-ping - Đo độ trễ
+  /**
+   * SỰ KIỆN: latency-ping
+   */
   socket.on("latency-ping", ({ timestamp, targetId }) => {
     if (targetId) {
-      io.to(targetId).emit("latency-ping", { timestamp, fromId: socket.id });
+      io.to(targetId).emit("latency-ping", {
+        timestamp,
+        fromId: socket.id,
+      });
     }
   });
 
@@ -141,7 +165,9 @@ io.on("connection", (socket) => {
     io.to(targetId).emit("latency-pong", { timestamp, fromId: socket.id });
   });
 
-  // SỰ KIỆN: chat-message
+  /**
+   * SỰ KIỆN: chat-message
+   */
   socket.on("chat-message", ({ roomId, message, username }) => {
     io.to(roomId).emit("chat-message", {
       message,
@@ -151,17 +177,21 @@ io.on("connection", (socket) => {
     });
   });
 
-  // SỰ KIỆN: disconnect
+  /**
+   * SỰ KIỆN: disconnect
+   */
   socket.on("disconnect", () => {
     const roomId = socket.roomId;
     if (roomId && rooms[roomId]) {
       rooms[roomId].users = rooms[roomId].users.filter(
         (u) => u.socketId !== socket.id
       );
+
       socket.to(roomId).emit("user-left", {
         socketId: socket.id,
         username: socket.username,
       });
+
       if (rooms[roomId].users.length === 0) {
         delete rooms[roomId];
         console.log(`[SERVER] Phòng ${roomId} đã bị xóa (trống)`);
@@ -178,7 +208,7 @@ server.listen(PORT, () => {
 ╔═══════════════════════════════════════╗
 ║   XoiLacTV Signaling Server           ║
 ║   Đang chạy tại: http://localhost:${PORT}  ║
-║   WebRTC P2P + Socket.IO              ║
+║   WebRTC P2P + Socket.IO + TURN       ║
 ╚═══════════════════════════════════════╝
   `);
 });
