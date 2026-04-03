@@ -118,11 +118,15 @@ async function joinRoom() {
   btn.textContent = 'Đang kết nối...'; btn.disabled = true;
 
   try {
+    // B1: Lấy stream + xử lý echo → B2: tạo manager → B3: join room
+    // Thứ tự này BẮT BUỘC — manager phải nhận stream đã xử lý echo
     await initLocalStream();
 
     AppState.webrtcManager = new WebRTCManager(
-      AppState.socket, AppState.localStream,
-      handleRemoteStream, handlePeerDisconnect
+      AppState.socket,
+      AppState.localStream,   // ← stream đã qua processStream()
+      handleRemoteStream,
+      handlePeerDisconnect
     );
 
     AppState.socket.emit('join-room', {
@@ -135,43 +139,42 @@ async function joinRoom() {
   }
 }
 
-// ── Local Stream với Echo Cancellation đầy đủ ──────────────────────────────
+// ── Local Stream với Echo Cancellation ────────────────────────────────────
 async function initLocalStream() {
   const audioConstraints = {
-    // Level 1: Browser AEC — quan trọng nhất, xử lý ở tầng hardware/OS
-    echoCancellation:  { exact: AppState.isEchoCancellation },
-    noiseSuppression:  { ideal: true },
-    autoGainControl:   { ideal: true },
+    // Level 1: Browser AEC — xử lý ở tầng hardware/OS
+    echoCancellation: { exact: AppState.isEchoCancellation },
+    noiseSuppression: { ideal: true },
+    autoGainControl:  { ideal: true },
     channelCount: 1,
     sampleRate: 48000,
     sampleSize: 16,
   };
 
   const videoConstraints = {
-    width: { ideal: 1280, max: 1920 },
-    height: { ideal: 720, max: 1080 },
-    frameRate: { ideal: 30, max: 60 },
+    width:     { ideal: 1280, max: 1920 },
+    height:    { ideal: 720,  max: 1080 },
+    frameRate: { ideal: 30,   max: 60   },
     facingMode: 'user',
   };
 
-  // Lấy stream với AEC constraints
+  // Lấy raw stream từ camera/mic
   const rawStream = await navigator.mediaDevices.getUserMedia({
     audio: audioConstraints,
     video: videoConstraints,
   });
 
-  // Level 2: AudioContext pipeline — lọc thêm (highpass + compressor)
-  // Khởi tạo WebRTCManager tạm thời để gọi applyEchoCancellation
-  const tempMgr = new WebRTCManager(AppState.socket, rawStream, () => {}, () => {});
+  // Level 2: AudioContext pipeline (highpass + compressor)
+  // FIX: dùng static WebRTCManager.processStream() thay vì applyEchoCancellation()
+  // Phải xử lý TRƯỚC khi tạo WebRTCManager — stream này sẽ được addTrack() vào PeerConnection
   AppState.localStream = AppState.isEchoCancellation
-    ? tempMgr.applyEchoCancellation(rawStream)
+    ? await WebRTCManager.processStream(rawStream)
     : rawStream;
 
   // Verify AEC status
   const audioTrack = AppState.localStream.getAudioTracks()[0];
   const settings = audioTrack?.getSettings?.() || {};
-  const aecOn = settings.echoCancellation !== false;
-  console.log('[Echo] AEC status:', aecOn, settings);
+  console.log('[Echo] AEC status:', settings.echoCancellation, settings);
 
   // Hiển thị local video
   const localVideo = document.getElementById('local-video');
@@ -205,18 +208,14 @@ function updateGridLayout() {
   const wrapper = document.getElementById('video-grid-wrapper');
   if (!wrapper) return;
 
-  // Đếm tổng tiles (không tính screenshare nếu có)
   const total = Object.keys(AppState.peers).length + 1; // +1 = mình
 
   if (AppState.isScreenSharing) {
-    // Screenshare mode: handled by has-screenshare class
     return;
   }
 
-  // Xóa has-screenshare nếu có
   wrapper.classList.remove('has-screenshare');
 
-  // Gán data-count để CSS tự chia grid
   if (total <= 6) {
     wrapper.setAttribute('data-count', String(total));
   } else {
@@ -268,13 +267,11 @@ async function toggleScreenShare() {
   const wrapper = document.getElementById('video-grid-wrapper');
 
   if (AppState.isScreenSharing) {
-    // Dừng share
     if (AppState.screenStream) {
       AppState.screenStream.getTracks().forEach(t => t.stop());
       AppState.screenStream = null;
     }
 
-    // Khôi phục camera track cho tất cả peer connections
     const camTrack = AppState.localStream?.getVideoTracks()[0];
     if (camTrack && AppState.webrtcManager) {
       for (const pc of Object.values(AppState.webrtcManager.peerConnections)) {
@@ -283,12 +280,10 @@ async function toggleScreenShare() {
       }
     }
 
-    // Xóa screenshare tile
     const shareTile = document.getElementById('screenshare-tile');
     const thumbsCol = document.getElementById('thumbnails-col');
     if (shareTile) shareTile.remove();
     if (thumbsCol) {
-      // Di chuyển video containers về wrapper
       while (thumbsCol.firstChild) wrapper.appendChild(thumbsCol.firstChild);
       thumbsCol.remove();
     }
@@ -305,7 +300,6 @@ async function toggleScreenShare() {
     return;
   }
 
-  // Bắt đầu share
   try {
     AppState.screenStream = await navigator.mediaDevices.getDisplayMedia({
       video: { frameRate: { ideal: 30 }, cursor: 'always' },
@@ -314,7 +308,6 @@ async function toggleScreenShare() {
 
     const screenTrack = AppState.screenStream.getVideoTracks()[0];
 
-    // Thay video track trong tất cả peer connections
     if (AppState.webrtcManager) {
       for (const pc of Object.values(AppState.webrtcManager.peerConnections)) {
         const sender = pc.getSenders().find(s => s.track?.kind === 'video');
@@ -322,7 +315,6 @@ async function toggleScreenShare() {
       }
     }
 
-    // Tạo screenshare tile lớn
     const shareTile = document.createElement('div');
     shareTile.className = 'screenshare-tile';
     shareTile.id = 'screenshare-tile';
@@ -330,12 +322,10 @@ async function toggleScreenShare() {
       <video id="screen-video" autoplay muted playsinline></video>
       <div class="screenshare-label">🖥️ Màn hình của bạn</div>`;
 
-    // Thu thập các video-container hiện tại vào thumbnails-col
     const thumbsCol = document.createElement('div');
     thumbsCol.className = 'thumbnails-col';
     thumbsCol.id = 'thumbnails-col';
 
-    // Di chuyển tất cả video containers vào thumbs col
     const existingTiles = [...wrapper.querySelectorAll('.video-container')];
     existingTiles.forEach(tile => thumbsCol.appendChild(tile));
 
@@ -344,7 +334,6 @@ async function toggleScreenShare() {
     wrapper.appendChild(thumbsCol);
     wrapper.classList.add('has-screenshare');
 
-    // Gán stream cho tile share
     const screenVideo = document.getElementById('screen-video');
     screenVideo.srcObject = AppState.screenStream;
 
@@ -354,7 +343,6 @@ async function toggleScreenShare() {
     btn.querySelector('.btn-icon').textContent = '⏹️';
     liveBadge.classList.remove('hidden');
 
-    // Dừng share khi user click "Stop" trên browser
     screenTrack.onended = () => {
       if (AppState.isScreenSharing) toggleScreenShare();
     };
@@ -398,28 +386,23 @@ function toggleEchoCancellation() {
   );
 }
 
-// Cập nhật TẤT CẢ echo UI indicators
 function updateEchoUI(isOn) {
-  // 1. Nút control bar
   const btn = document.getElementById('btn-toggle-echo');
   btn.classList.toggle('btn-active', isOn);
   btn.querySelector('.btn-label').textContent = `Echo Cancel: ${isOn ? 'BẬT' : 'TẮT'}`;
 
-  // 2. Badge trong topbar
   const topBadge = document.getElementById('echo-topbar-badge');
   if (topBadge) {
     topBadge.className = `echo-topbar-badge ${isOn ? 'echo-on' : 'echo-off'}`;
     document.getElementById('echo-topbar-label').textContent = `Echo Cancel: ${isOn ? 'BẬT' : 'TẮT'}`;
   }
 
-  // 3. Indicator overlay trên local video tile
   const videoIndicator = document.getElementById('echo-video-indicator');
   if (videoIndicator) {
     videoIndicator.className = `echo-active-indicator ${isOn ? '' : 'echo-off'}`;
     videoIndicator.lastChild.textContent = isOn ? ' AEC BẬT' : ' AEC TẮT';
   }
 
-  // 4. Banner trong info tab
   const banner = document.getElementById('echo-info-banner');
   if (banner) {
     banner.className = `echo-info-banner ${isOn ? 'on' : 'off'}`;
@@ -429,7 +412,6 @@ function updateEchoUI(isOn) {
       : 'Tắt — có thể nghe tiếng vọng khi dùng loa ngoài';
   }
 
-  // 5. Span cũ trong info-item
   const echoStatus = document.getElementById('echo-status');
   if (echoStatus) echoStatus.textContent = isOn ? 'BẬT' : 'TẮT';
 }
@@ -448,7 +430,6 @@ function leaveRoom() {
 
   setTimeout(() => { AppState.socket.connect(); initSocketConnection(); }, 500);
 
-  // Reset grid
   const wrapper = document.getElementById('video-grid-wrapper');
   if (wrapper) {
     wrapper.innerHTML = `
