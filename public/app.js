@@ -143,7 +143,7 @@ async function joinRoom() {
 async function initLocalStream() {
   const audioConstraints = {
     // Level 1: Browser AEC — xử lý ở tầng hardware/OS
-    echoCancellation: { exact: AppState.isEchoCancellation },
+    echoCancellation: { ideal: true },
     noiseSuppression: { ideal: true },
     autoGainControl:  { ideal: true },
     channelCount: 1,
