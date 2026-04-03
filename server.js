@@ -244,7 +244,9 @@ io.on("connection", (socket) => {
     console.log(`[SERVER] Người dùng ngắt kết nối: ${socket.id}`);
   });
 });
-
+if (process.env.METERED_API_KEY && process.env.METERED_APP_NAME) {
+    // tự động fetch TURN credentials từ Metered.ca
+}
 // ─── Khởi động server ──────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
