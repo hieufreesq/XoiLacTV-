@@ -38,7 +38,7 @@ app.use(express.json());
 app.get("/api/ice-servers", async (req, res) => {
   const iceServers = [
     { urls: "stun:stun.l.google.com:19302" },
-    { urls: "stun:stun1.l.google.com:19302" },
+    { urls: "turn:standard.relay.metered.live:80" },
   ];
 
   try {
