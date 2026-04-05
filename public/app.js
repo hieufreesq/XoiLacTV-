@@ -1,8 +1,3 @@
-/**
- * XoiLacTV - App Logic (app.js)
- * FIX: video grid chia đều, screen share layout, echo cancellation rõ hơn
- */
-
 const AppState = {
   socket: null,
   webrtcManager: null,
